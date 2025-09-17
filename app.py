@@ -47,7 +47,11 @@ def get_page_count(domain, timeout_seconds=15):
         f"https://{domain}/sitemap.xml",
         f"https://www.{domain}/sitemap.xml",
         f"https://{domain}/sitemap_index.xml",
-        f"https://www.{domain}/sitemap_index.xml"
+        f"https://www.{domain}/sitemap_index.xml",
+        f"https://{domain}/wp-sitemap.xml",  # WordPress default
+        f"https://www.{domain}/wp-sitemap.xml",
+        f"https://{domain}/sitemap-index.xml",  # Alternative naming
+        f"https://www.{domain}/sitemap-index.xml"
     ]
     
     headers = {
@@ -105,13 +109,48 @@ def get_page_count(domain, timeout_seconds=15):
         except (requests.RequestException, TimeoutError):
             continue  # Try next sitemap URL
     
-    # If no pages found, try to at least verify the domain exists
+    # If no pages found, try robots.txt and alternative methods
     if total_pages == 0:
+        # Check robots.txt for sitemap references
+        try:
+            robots_response = session.get(f"https://{domain}/robots.txt", timeout=5)
+            if robots_response.status_code == 200:
+                robots_content = robots_response.text.lower()
+                for line in robots_content.split('\n'):
+                    if 'sitemap:' in line:
+                        sitemap_url = line.split('sitemap:', 1)[1].strip()
+                        try:
+                            sitemap_response = session.get(sitemap_url, timeout=timeout_seconds)
+                            if sitemap_response.status_code == 200:
+                                root = ElementTree.fromstring(sitemap_response.content)
+                                urls = root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}url')
+                                if urls:
+                                    total_pages = len(urls)
+                                    method = "Robots.txt sitemap"
+                                    return total_pages, method
+                        except:
+                            continue
+        except:
+            pass
+        
+        # Final fallback - try to verify domain exists and estimate
         try:
             response = session.get(f"https://{domain}", timeout=5)
             if response.status_code == 200:
-                total_pages = 1
-                method = "Homepage only (estimate)"
+                # Very rough estimation based on common site patterns
+                content = response.text.lower()
+                
+                # Look for navigation indicators
+                nav_indicators = ['menu', 'navigation', 'nav-', 'href=', 'services', 'products', 'about']
+                indicator_count = sum(content.count(indicator) for indicator in nav_indicators)
+                
+                # Rough estimation based on site complexity
+                if indicator_count > 50:
+                    total_pages = max(10, min(indicator_count // 10, 50))  # 10-50 page estimate
+                    method = "Homepage analysis (estimate)"
+                else:
+                    total_pages = 5  # Conservative small site estimate
+                    method = "Small site estimate"
         except:
             method = "Domain inaccessible"
     
